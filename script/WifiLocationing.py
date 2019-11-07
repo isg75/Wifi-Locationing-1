@@ -11,27 +11,31 @@ Created on Wed Oct 16 11:39:49 2019
 # Import packages
 import pandas as pd
 from sklearn import preprocessing
+from sklearn.utils import resample
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.metrics import mean_absolute_error, accuracy_score, \
-                            classification_report, confusion_matrix
+                            classification_report, confusion_matrix, \
+                            cohen_kappa_score
 from sklearn.model_selection import cross_val_score
 import plotly.express as px
 import numpy as np
 from plotly.offline import plot
 from sklearn.pipeline import Pipeline
 from xgboost import XGBRegressor
-import plotly.graph_objects as go
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.svm import SVC
+from math import sqrt, pi
 
 """Import Data"""
 # Save filepath to variable for easier access
 training_data_path = '/home/aline/Documentos/Ubiqum/IoT Analytics/WifiLocationing/data/trainingData.csv'
 validation_data_path = '/home/aline/Documentos/Ubiqum/IoT Analytics/WifiLocationing/data/validationData.csv'
+test_data_path = '/home/aline/Documentos/Ubiqum/IoT Analytics/WifiLocationing/data/testData.csv'
 
 # read the data and store data in DataFrame
 training_data = pd.read_csv(training_data_path) 
 validation_data = pd.read_csv(validation_data_path)
+test_data = pd.read_csv(test_data_path)
 
 """Get to know the data"""
 # Print a summary of the data
@@ -49,13 +53,14 @@ validation_data.isnull().any().sum()
 """Pre processing"""
 # Feature selection - Pick only WAPs
 training = training_data.iloc[:,0:520]
-validation = validation_data.iloc[:,0:520]
+training = training.append(validation_data.iloc[:,0:520])
+validation = test_data.iloc[:,0:520]
 
 # Targets
-latitude = training_data.LATITUDE
-longitude = training_data.LONGITUDE
-floor = training_data.FLOOR
-building = training_data.BUILDINGID
+latitude = training_data.LATITUDE.append(validation_data.LATITUDE)
+longitude = training_data.LONGITUDE.append(validation_data.LONGITUDE)
+floor = training_data.FLOOR.append(validation_data.FLOOR)
+building = training_data.BUILDINGID.append(validation_data.BUILDINGID)
 
 # Set floor and building as categorical data
 floor = pd.Series(floor, dtype="category")
@@ -120,7 +125,7 @@ training_sscaler = s_scaler.fit_transform(training)
 training_sscaler = pd.DataFrame(training_sscaler, 
                                 columns=list(training.columns))
 
-# Function to standardize
+# Function to standardize per row
 def standardize(df):
     for i in range(0,len(df)):
         # Replace 'not found' with the min
@@ -217,7 +222,7 @@ rf_classifier.fit(training_building,floor)
 rfc_predictions_floor = rf_classifier.predict(validation_building)
 accuracy_score(validation_data.FLOOR, rfc_predictions_floor)
 
-#SVM SVC - Floor
+# SVM SVC - Floor
 svc_model.fit(training_building,floor)
 svc_predictions_floor = svc_model.predict(validation_building)
 accuracy_score(validation_data.FLOOR, svc_predictions_floor)
@@ -263,7 +268,7 @@ rf_model.fit(training_floor_b1,latitude_b1)
 rf_predictions_latitude_b1 = rf_model.predict(validation_floor_b1)
 rf_model.fit(training_floor_b2,latitude_b2)
 rf_predictions_latitude_b2 = rf_model.predict(validation_floor_b2)
-pred_latitude = np.empty(len(validation_data))
+pred_latitude = np.empty(len(test_data))
 pred_latitude[index_b0_val] = rf_predictions_latitude_b0
 pred_latitude[index_b1_val] = rf_predictions_latitude_b1
 pred_latitude[index_b2_val] = rf_predictions_latitude_b2
@@ -273,6 +278,19 @@ mean_absolute_error(validation_data.LATITUDE, pred_latitude)
 rf_model.fit(training_floor,latitude)
 rf_predictions_latitude = rf_model.predict(validation_floor)
 mean_absolute_error(validation_data.LATITUDE, rf_predictions_latitude)
+
+# kNN 
+knn_regressor = KNeighborsRegressor(n_neighbors=5)
+knn_regressor.fit(training_floor_b0,latitude_b0)
+knn_predictions_latitude_b0 = knn_regressor.predict(validation_floor_b0)
+knn_regressor.fit(training_floor_b1,latitude_b1)
+knn_predictions_latitude_b1 = knn_regressor.predict(validation_floor_b1)
+knn_regressor.fit(training_floor_b2,latitude_b2)
+knn_predictions_latitude_b2 = knn_regressor.predict(validation_floor_b2)
+pred_latitude_knn = np.empty(len(test_data))
+pred_latitude_knn[index_b0_val] = knn_predictions_latitude_b0
+pred_latitude_knn[index_b1_val] = knn_predictions_latitude_b1
+pred_latitude_knn[index_b2_val] = knn_predictions_latitude_b2
 
 #XGBoost - Latitude
 xgb_model = XGBRegressor(n_estimators=1000, learning_rate=0.05)
@@ -286,7 +304,7 @@ mean_absolute_error(validation_data.LATITUDE, xgb_predictions_latitude)
 #Random Forest Regressor - Longitude
 # Create new columns with the latitude in both data set
 validation_latitude = validation_floor
-validation_latitude['LATITUDE'] = rf_predictions_latitude 
+validation_latitude['LATITUDE'] = pred_latitude_knn 
 training_latitude = training_floor
 training_latitude['LATITUDE'] = latitude
 # Fit the model - General
@@ -311,13 +329,12 @@ longitude_f2 = longitude.iloc[index_f2]
 longitude_f3 = longitude.iloc[index_f3]
 longitude_f4 = longitude.iloc[index_f4]
 
-index_f0_val = validation_floor.index[validation_floor['FLOOR'] == 0]
-index_f1_val = validation_floor.index[validation_floor['FLOOR'] == 1]
-index_f2_val = validation_floor.index[validation_floor['FLOOR'] == 2]
-index_f3_val = validation_floor.index[validation_floor['FLOOR'] == 3]
-index_f4_val = validation_floor.index[validation_floor['FLOOR'] == 4]
-validation_latitude_floor = validation_floor.iloc[:,0:522]
-validation_latitude_floor['LATITUDE'] = pred_latitude
+index_f0_val = validation_latitude.index[validation_floor['FLOOR'] == 0]
+index_f1_val = validation_latitude.index[validation_floor['FLOOR'] == 1]
+index_f2_val = validation_latitude.index[validation_floor['FLOOR'] == 2]
+index_f3_val = validation_latitude.index[validation_floor['FLOOR'] == 3]
+index_f4_val = validation_latitude.index[validation_floor['FLOOR'] == 4]
+validation_latitude_floor = validation_latitude.iloc[:,0:523]
 validation_latitude_f0 = validation_latitude_floor.iloc[index_f0_val,:]
 validation_latitude_f1 = validation_latitude_floor.iloc[index_f1_val,:]
 validation_latitude_f2 = validation_latitude_floor.iloc[index_f2_val,:]
@@ -335,13 +352,31 @@ rf_model.fit(training_latitude_f3,longitude_f3)
 rf_predictions_longitude_f3 = rf_model.predict(validation_latitude_f3)
 rf_model.fit(training_latitude_f4,longitude_f4)
 rf_predictions_longitude_f4 = rf_model.predict(validation_latitude_f4)
-pred_longitude_floor = np.empty(len(validation_data))
+pred_longitude_floor = np.empty(len(test_data))
 pred_longitude_floor[index_f0_val] = rf_predictions_longitude_f0
 pred_longitude_floor[index_f1_val] = rf_predictions_longitude_f1
 pred_longitude_floor[index_f2_val] = rf_predictions_longitude_f2
 pred_longitude_floor[index_f3_val] = rf_predictions_longitude_f3
 pred_longitude_floor[index_f4_val] = rf_predictions_longitude_f4
 mean_absolute_error(validation_data.LONGITUDE, pred_longitude_floor)
+
+# kNN  
+knn_regressor.fit(training_latitude_f0,longitude_f0)
+knn_predictions_longitude_f0 = knn_regressor.predict(validation_latitude_f0)
+knn_regressor.fit(training_latitude_f1,longitude_f1)
+knn_predictions_longitude_f1 = knn_regressor.predict(validation_latitude_f1)
+knn_regressor.fit(training_latitude_f2,longitude_f2)
+knn_predictions_longitude_f2 = knn_regressor.predict(validation_latitude_f2)
+knn_regressor.fit(training_latitude_f3,longitude_f3)
+knn_predictions_longitude_f3 = knn_regressor.predict(validation_latitude_f3)
+knn_regressor.fit(training_latitude_f4,longitude_f4)
+knn_predictions_longitude_f4 = knn_regressor.predict(validation_latitude_f4)
+pred_longitude_floor_knn = np.empty(len(test_data))
+pred_longitude_floor_knn[index_f0_val] = knn_predictions_longitude_f0
+pred_longitude_floor_knn[index_f1_val] = knn_predictions_longitude_f1
+pred_longitude_floor_knn[index_f2_val] = knn_predictions_longitude_f2
+pred_longitude_floor_knn[index_f3_val] = knn_predictions_longitude_f3
+pred_longitude_floor_knn[index_f4_val] = knn_predictions_longitude_f4
 
 #XGBoost - Longitude
 xgb_model.fit(training_latitude, longitude, 
@@ -350,6 +385,41 @@ xgb_model.fit(training_latitude, longitude,
               verbose=False)
 xgb_predictions_longitude = xgb_model.predict(validation_latitude)
 mean_absolute_error(validation_data.LONGITUDE, xgb_predictions_longitude)
+
+"""Confidence intervals"""
+# CI for building - 98%
+accuracy_building = accuracy_score(validation_data.BUILDINGID, svc_predictions)
+ci_building = 2.33 * sqrt((accuracy_building * (1 - accuracy_building)) / 1111)
+
+# CI for floor - 98%
+accuracy_floor = accuracy_score(validation_data.FLOOR, svc_predictions_floor)
+ci_floor = 2.33 * sqrt((accuracy_floor * (1 - accuracy_floor)) / 1111)
+
+"""Boostrap"""
+
+t_floor_boostrap = training_building
+t_floor_boostrap['FLOOR'] = floor
+v_floor_boostrap = validation_building
+v_floor_boostrap['FLOOR'] = validation_data.FLOOR
+
+n_iterations = 100
+flooraccuracyscores = []
+floorkappascores    = []
+floorpredictions    = pd.DataFrame()
+for i in range(n_iterations):
+    # prepare train and test sets
+    trains = resample(t_floor_boostrap, n_samples = int(len(t_floor_boostrap) * 0.50))
+    tests  = resample(v_floor_boostrap, n_samples = int(len(v_floor_boostrap) * 0.50))
+    # fit model
+#    model = KNeighborsClassifier(n_neighbors=10)
+    svc_model.fit(trains.iloc[:,:-1], trains.iloc[:,-1])
+    # evaluate model
+    predictions = svc_model.predict(tests.iloc[:,:-1])
+    score1 = accuracy_score(tests.iloc[:,-1], predictions)
+    score2 = cohen_kappa_score(tests.iloc[:,-1], predictions)
+    flooraccuracyscores.append(score1)
+    floorkappascores.append(score2)
+    floorpredictions = floorpredictions.append(pd.DataFrame(predictions), ignore_index=True)
 
 """Plots"""
 # Plot training
@@ -369,8 +439,8 @@ scatter_validation = px.scatter_3d(validation_data,
 plot(scatter_validation)
 
 # Create final data with predictions
-validation_predicted = validation_latitude
-validation_predicted['LONGITUDE'] = rf_predictions_longitude
+validation_predicted = validation_latitude_floor
+validation_predicted['LONGITUDE'] = pred_longitude_floor_knn
 # Plot results
 scatter_results = px.scatter_3d(validation_predicted, 
                     x="LONGITUDE", 
@@ -379,19 +449,33 @@ scatter_results = px.scatter_3d(validation_predicted,
                     color="BUILDINGID")
 plot(scatter_results)
 
-# Try to know H2O to parallelize the processing
-# Try to learn about PCA
-# pipeline - ok
-# Cross-validation - ok
-# Boosted gradient - ok
-# hyper parameters and random_state
-# normalize WAPs (remove 100) - ok
-# standarlize WAPs (remove 100) per row - ok
-# pick the high values for each row - ok
-# Use floor and building as categorical then use RandomForestClassifier - ok
-# data-leakage
-# plot errors
-# api google maps to fit the predictions
-# check errors with other features (device, user, etc)
-# try new models (knn, svm, etc) - ok
-# try neural network
+"""Export CSV"""
+validation_predicted.to_csv('/home/aline/Documentos/Ubiqum/IoT Analytics/WifiLocationing/data/AlineRotateCompleteKnn.csv')
+
+"""Orientation change"""
+# Training
+angle = np.arctan(training_data["LATITUDE"][0]/training_data["LONGITUDE"][0])
+angle = angle/pi
+longitude_rotate = training_data["LONGITUDE"]*np.cos(angle) + training_data["LATITUDE"]*np.sin(angle)
+latitude_rotate = training_data["LATITUDE"]*np.cos(angle) - training_data["LONGITUDE"]*np.sin(angle)
+plot(px.scatter(longitude_rotate,latitude_rotate))
+training_data["LONGITUDE"] = longitude_rotate
+training_data["LATITUDE"] = latitude_rotate
+# Validation
+v_longitude_rotate = validation_data["LONGITUDE"]*np.cos(angle) + validation_data["LATITUDE"]*np.sin(angle)
+v_latitude_rotate = validation_data["LATITUDE"]*np.cos(angle) - validation_data["LONGITUDE"]*np.sin(angle)
+plot(px.scatter(v_longitude_rotate,v_latitude_rotate))
+validation_data["LONGITUDE"] = v_longitude_rotate
+validation_data["LATITUDE"] = v_latitude_rotate
+# Test
+t_longitude_rotate = test_data["LONGITUDE"]*np.cos(angle) + test_data["LATITUDE"]*np.sin(angle)
+t_latitude_rotate = test_data["LATITUDE"]*np.cos(angle) - test_data["LONGITUDE"]*np.sin(angle)
+plot(px.scatter(t_longitude_rotate,t_latitude_rotate))
+test_data["LONGITUDE"] = t_longitude_rotate
+test_data["LATITUDE"] = t_latitude_rotate
+# Return to the same orientation
+v_longitude_back = validation_predicted["LONGITUDE"]*np.cos(angle) - validation_predicted["LATITUDE"]*np.sin(angle)
+v_latitude_back = validation_predicted["LATITUDE"]*np.cos(angle) + validation_predicted["LONGITUDE"]*np.sin(angle)
+plot(px.scatter(v_longitude_back,v_latitude_back))
+validation_predicted["LONGITUDE"] = v_longitude_back
+validation_predicted["LATITUDE"] = v_latitude_back
